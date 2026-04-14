@@ -1,0 +1,185 @@
+# Cloudflare Template
+
+A template repository for building personal Cloudflare Workers apps with
+TanStack Start, D1 (via Drizzle), Google OAuth, and Tailwind + shadcn-style
+primitives.
+
+Use the **"Use this template"** button on GitHub to create a new repo from
+this one. Then follow the setup below.
+
+## What this is
+
+A pre-wired starter for full-stack apps on the Cloudflare edge:
+
+- **TanStack Start** (React 19) — SSR, file-based routing, server functions
+- **Cloudflare Workers + D1** — edge runtime, serverless SQLite
+- **Drizzle ORM** — the same schema works against D1 in prod and
+  `better-sqlite3` locally
+- **Arctic + Google OAuth** — sign-in with cookie-backed sessions
+- **Tailwind v4 + Radix** — shadcn-style component primitives
+- **Claude Code skills** — Cloudflare, Wrangler, Durable Objects, and
+  Workers best-practices skills ship inside `.agents/skills/`
+
+## 1. Initial setup
+
+After creating your repo from the template:
+
+```bash
+# 1. Clone and enter your new repo
+git clone git@github.com:<you>/<your-repo>.git
+cd <your-repo>
+
+# 2. Pick a name. Replace __APP_NAME__ throughout the repo.
+#    (macOS — GNU sed users: drop the '' after -i)
+find . -type f \
+  \( -name '*.ts' -o -name '*.tsx' -o -name '*.json' -o -name '*.jsonc' \
+     -o -name '*.md' -o -name '*.css' \) \
+  -not -path './node_modules/*' -not -path './.git/*' \
+  -exec sed -i '' 's/__APP_NAME__/your-app-name/g' {} +
+
+# 3. Install deps
+npm install
+
+# 4. Generate the initial DB migration (creates users/sessions/notes tables)
+npm run db:generate
+
+# 5. Create your D1 database and paste the returned ID into wrangler.jsonc,
+#    replacing __D1_DATABASE_ID__
+wrangler d1 create your-app-name
+
+# 6. Create a Google OAuth client at https://console.cloud.google.com
+#    - Authorized redirect URIs:
+#        http://localhost:3000/auth/callback
+#        https://your-app-name.fletcheaston.com/auth/callback
+
+# 7. Set production secrets
+wrangler secret put GOOGLE_CLIENT_ID
+wrangler secret put GOOGLE_CLIENT_SECRET
+wrangler secret put SESSION_SECRET   # any 32+ char random hex string
+```
+
+> **Domain placeholder.** `wrangler.jsonc` pre-wires a custom domain at
+> `__APP_NAME__.fletcheaston.com`. Adjust the `routes[0].pattern` and the
+> `VITE_BASE_URL` var if your app lives elsewhere.
+
+## 2. Local development
+
+```bash
+# Copy the env template and fill in your OAuth client + a session secret
+cp .env.example .env.local
+# edit .env.local
+
+# Apply the schema to a local SQLite file (creates local.db)
+DATABASE_URL=local.db npm run db:push
+
+# Start the dev server
+npm run dev
+```
+
+The app runs at `http://localhost:3000`. `better-sqlite3` is lazy-loaded on
+the server only — never sent to the browser.
+
+## 3. Deployment
+
+```bash
+# Apply pending migrations to remote D1
+wrangler d1 migrations apply your-app-name --remote
+
+# Build and deploy
+npm run build
+wrangler deploy
+```
+
+Production reads D1 via the `cloudflare:workers` env binding. The
+`nodejs_compat_populate_process_env` compat flag makes Wrangler-managed
+secrets available to code that expects `process.env`.
+
+## 4. Repo structure
+
+```
+.
+├── app/
+│   └── ssr.tsx                   # Cloudflare Workers entry — wires env to setCfEnv
+├── src/
+│   ├── router.tsx                # TanStack Router instance
+│   ├── routeTree.gen.ts          # generated — do not edit
+│   ├── styles.css                # Tailwind v4 entry + shadcn CSS variables
+│   ├── routes/
+│   │   ├── __root.tsx            # HTML shell, <head>, devtools
+│   │   ├── index.tsx             # public landing, "Sign in with Google"
+│   │   ├── home.tsx              # protected — shows user + notes CRUD
+│   │   └── auth/                 # google.tsx, callback.tsx, logout.tsx
+│   ├── components/
+│   │   ├── ui/                   # shadcn primitives (button, input, label, textarea)
+│   │   ├── NoteForm.tsx          # TanStack Form + Zod example
+│   │   └── NoteList.tsx
+│   ├── db/
+│   │   ├── schema.ts             # users, sessions, notes
+│   │   ├── index.ts              # Env type + D1 drizzle factory
+│   │   ├── getDb.ts              # unified access: D1 in prod, better-sqlite3 locally
+│   │   ├── cf-env.ts             # module-level env store (see ssr.tsx)
+│   │   └── local.ts              # lazy better-sqlite3 init
+│   └── lib/
+│       ├── auth.ts               # Arctic Google client
+│       ├── session.ts            # cookie + session table helpers
+│       ├── requireAuth.ts        # loader-friendly auth guard
+│       ├── getSecret.ts          # env/secret access with CF + process.env fallback
+│       ├── utils.ts              # cn() — tailwind-merge + clsx
+│       └── server/
+│           ├── auth.ts           # $initiateGoogleAuth, $handleCallback, $logout
+│           └── notes.ts          # $listNotes, $createNote, $deleteNote
+├── drizzle/
+│   └── migrations/               # generated by drizzle-kit
+├── wrangler.jsonc                # Workers config, D1 binding, route
+├── drizzle.config.ts
+└── vite.config.ts
+```
+
+## 5. Architecture notes
+
+- **Server functions only.** All DB access happens inside `createServerFn`
+  handlers under `src/lib/server/`. TanStack Start strips handler bodies
+  from the client bundle, so Drizzle + the D1/better-sqlite3 modules never
+  ship to the browser.
+- **Scope every query by `userId`.** `requireAuth()` returns the current
+  user; server functions should filter their queries with `eq(table.userId,
+  user.id)` and, for writes, include `userId` in the `where`. See
+  `src/lib/server/notes.ts` for the pattern.
+- **One DB, two drivers.** `src/db/getDb.ts` dynamically imports
+  `cloudflare:workers` and falls back to `better-sqlite3` when that import
+  fails — so the same code runs locally and on the edge.
+- **Secrets.** `getSecret(name)` reads Cloudflare's env binding first
+  (populated in `app/ssr.tsx`) and falls back to `process.env` for local
+  dev. Add new secrets to the `SecretName` union in
+  `src/lib/getSecret.ts`.
+
+## 6. Next steps — building your app
+
+1. **Delete the notes example** once you don't need it:
+   - remove `notes` from `src/db/schema.ts`
+   - delete `src/lib/server/notes.ts`, `src/components/NoteForm.tsx`,
+     `src/components/NoteList.tsx`
+   - simplify `src/routes/home.tsx`
+   - run `npm run db:generate` to create a migration that drops the table
+2. **Add your schema** to `src/db/schema.ts`, then `npm run db:generate` and
+   `npm run db:push` (local) / `wrangler d1 migrations apply --remote`
+   (prod).
+3. **Add routes** under `src/routes/`. Protected pages call
+   `requireAuth()` in their loader.
+4. **Add UI primitives** via shadcn — the component registry is already
+   wired in `components.json` (new-york style, zinc base).
+5. **Update `CLAUDE.md`** so Claude Code knows what this app does before it
+   touches a single file.
+
+## 7. Removing or swapping auth
+
+If you don't want Google OAuth — or want a different provider:
+
+- [`docs/REMOVING_AUTH.md`](docs/REMOVING_AUTH.md) — delete the auth layer
+  entirely.
+- [`docs/SWAPPING_AUTH_PROVIDER.md`](docs/SWAPPING_AUTH_PROVIDER.md) — swap
+  Google for another Arctic provider.
+
+## 8. License
+
+[MIT](LICENSE) © Fletcher Easton

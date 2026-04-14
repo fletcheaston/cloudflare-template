@@ -1,0 +1,5 @@
+node_modules
+dist
+.cache
+src/routeTree.gen.ts
+drizzle/migrations
