@@ -168,8 +168,10 @@ secrets available to code that expects `process.env`.
    `requireAuth()` in their loader.
 4. **Add UI primitives** via shadcn — the component registry is already
    wired in `components.json` (new-york style, zinc base).
-5. **Update `CLAUDE.md`** so Claude Code knows what this app does before it
-   touches a single file.
+5. **Update `AGENTS.md`** so Claude Code (and any other agent harness that
+   reads `AGENTS.md`) knows what this app does before it touches a single
+   file. `CLAUDE.md` is a one-line `@AGENTS.md` import — edit `AGENTS.md`,
+   not `CLAUDE.md`.
 
 ## 7. Removing or swapping auth
 
